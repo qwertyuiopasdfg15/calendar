@@ -7,7 +7,7 @@ import requests
 import json
 import re
 
-DASHSCOPE_API_KEY = "sk-c678decd52c24ce28d08a8815654d43d"
+DASHSCOPE_API_KEY = ""#add your key here
 
 
 def process_text_by_instruction(text_b: str, instruction_a: str, model: str = "qwen-turbo") -> str:
