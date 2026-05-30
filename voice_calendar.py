@@ -5,6 +5,7 @@ import sys
 from io import StringIO
 import threading
 import re
+import json
 
 # 尝试导入音频相关模块
 try:
@@ -20,82 +21,58 @@ except ImportError as e:
 
 # 导入大模型处理函数
 try:
-    from chat_for_charavter import parse_calendar_command
+    from bai_lian_nlp_parser import parse_calendar_command
     AI_AVAILABLE = True
     print("✅ 大模型模块加载成功")
-except ImportError:
-    print("⚠️ 大模型模块导入失败，使用增强解析器")
+except ImportError as e:
+    print(f"⚠️ 大模型模块导入失败: {e}")
     AI_AVAILABLE = False
     
     def parse_calendar_command(user_input):
-        """增强的命令解析器，支持删除特定事项"""
-        cmd = {"action": "add", "date": 1, "content": user_input, "time": [], "deadline": False, "delete_content": ""}
+        """备用的简单解析器 - 自动检测多命令"""
+        # 检查是否包含多个命令的分隔符
+        separators = ['[，,、]', '然后', '接着', '再', '之后', '以及', '还有', '同时', '并且']
+        has_multi = any(re.search(sep, user_input) for sep in ['，', ',', '、', '以及', '还有', '同时'])
         
-        # 提取日期
+        if has_multi or len(re.findall(r'\d+号', user_input)) > 1:
+            # 多命令：按分隔符分割
+            parts = re.split(r'[，,、以及还有同时]+', user_input)
+            commands = []
+            for part in parts:
+                part = part.strip()
+                if part:
+                    cmd = {"action": "add", "date": 1, "content": part, "time": [], "deadline": False}
+                    date_match = re.search(r'(\d+)(?:号|日)', part)
+                    if date_match:
+                        cmd["date"] = int(date_match.group(1))
+                    if "删除" in part:
+                        cmd["action"] = "delete"
+                    elif "查看" in part:
+                        cmd["action"] = "view"
+                    elif "清空" in part:
+                        cmd["action"] = "clear"
+                    # 提取内容（去掉日期）
+                    content = re.sub(r'\d+号', '', part).strip()
+                    if content:
+                        cmd["content"] = content
+                    commands.append(cmd)
+            return commands if len(commands) > 1 else commands[0]
+        
+        # 单命令
+        cmd = {"action": "add", "date": 1, "content": user_input, "time": [], "deadline": False}
         date_match = re.search(r'(\d+)(?:号|日)', user_input)
         if date_match:
             cmd["date"] = int(date_match.group(1))
-        
-        # 提取时间
-        time_match = re.search(r'(\d{1,2})[:：](\d{2})', user_input)
-        if not time_match:
-            time_match = re.search(r'(\d{1,2})\s*点(?:\s*(\d{1,2})\s*分)?', user_input)
-            if time_match:
-                hour = int(time_match.group(1))
-                minute = int(time_match.group(2)) if time_match.group(2) else 0
-                if "下午" in user_input and hour < 12:
-                    hour += 12
-                cmd["time"] = [hour, minute]
-        
-        # 判断操作类型
-        if "删除" in user_input or "移除" in user_input or "去掉" in user_input:
+        if "删除" in user_input:
             cmd["action"] = "delete"
-            # 提取要删除的事项内容
-            delete_patterns = [
-                r'删除(?:第?\d+号?的)?[：:]*\s*(.+?)(?:的事?项?|$)',  # 删除1号的买水果
-                r'把\s*(.+?)\s*删除',  # 把买水果删除
-                r'移除\s*(.+?)(?:这个事项)?',  # 移除买水果
-            ]
-            for pattern in delete_patterns:
-                match = re.search(pattern, user_input)
-                if match:
-                    cmd["delete_content"] = match.group(1).strip()
-                    cmd["content"] = cmd["delete_content"]
-                    break
-            if not cmd["delete_content"]:
-                # 如果没匹配到，尝试提取关键词
-                words = user_input.replace("删除", "").replace("移除", "").replace("去掉", "")
-                words = re.sub(r'\d+号', '', words)
-                cmd["delete_content"] = words.strip()
-                cmd["content"] = cmd["delete_content"]
-        
-        elif "查看" in user_input or "显示" in user_input or "有什么" in user_input:
+        elif "查看" in user_input:
             cmd["action"] = "view"
-        
-        elif "清空" in user_input or "清除" in user_input:
+        elif "清空" in user_input:
             cmd["action"] = "clear"
-            if "所有" in user_input or "全部" in user_input:
-                cmd["clear_all"] = True
-        
-        elif "截止" in user_input or "ddl" in user_input or "deadline" in user_input:
-            cmd["action"] = "add"
-            cmd["deadline"] = True
-            # 提取内容
-            content = user_input
-            for word in ["截止", "ddl", "deadline", "添加", "提醒我"]:
-                content = content.replace(word, "")
-            content = re.sub(r'\d+号', '', content)
-            cmd["content"] = content.strip()
-        
-        else:
-            cmd["action"] = "add"
-            # 提取内容
-            content = user_input
-            for word in ["添加", "提醒我", "记得", "帮我记"]:
-                content = content.replace(word, "")
-            content = re.sub(r'\d+号', '', content)
-            cmd["content"] = content.strip()
-        
+        # 提取内容
+        content = re.sub(r'\d+号', '', user_input).strip()
+        if content:
+            cmd["content"] = content
         return cmd
 
 
@@ -163,7 +140,7 @@ class VoiceRecognizer:
 class VoiceCalendarGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("🎙️ 智能语音日历系统")
+        self.root.title("🎙️ 智能语音日历系统 - 支持多命令")
         self.root.geometry("1200x800")
         
         # 创建Month对象
@@ -237,8 +214,10 @@ class VoiceCalendarGUI:
         tip_frame.pack(pady=5, fill=tk.X, padx=10)
         
         tips = [
-            "📅 添加: '1号下午3点开会' / '15号截止交报告'",
-            "🗑️ 删除: '删除1号的买水果' / '把买水果删除' / '移除3号的健身'",
+            "📅 单个添加: '1号下午3点开会'",
+            "🔄 多个添加: '1号下午3点开会，5号上午10点评审，15号截止交报告'",
+            "🗑️ 混合操作: '删除1号的买水果，然后添加3号健身，最后查看5号'",
+            "📝 中文连接: '1号开会、5号评审以及15号截止交报告'",
             "👀 查看: '查看5号' / '5号有什么事情'",
             "🧹 清空: '清空28号' / '清空所有事项'"
         ]
@@ -269,15 +248,15 @@ class VoiceCalendarGUI:
         ttk.Label(example_frame, text="快速示例:", font=("Arial", 10)).pack(side=tk.LEFT, padx=5)
         
         examples = [
-            ("📅 1号开会", "1号开会"),
-            ("⚠️ 15号截止交报告", "15号截止交报告"),
+            ("📅 单个添加", "1号开会"),
+            ("🔄 多个添加", "1号开会，5号评审，15号截止"),
+            ("🗑️ 混合操作", "删除1号的买水果，添加3号健身"),
             ("👀 查看5号", "查看5号"),
-            ("🗑️ 删除1号的买水果", "删除1号的买水果"),
-            ("🗑️ 移除25号的朋友聚会", "移除25号的朋友聚会")
+            ("🧹 清空28号", "清空28号")
         ]
         
         for text, cmd in examples:
-            btn = ttk.Button(example_frame, text=text, width=14,
+            btn = ttk.Button(example_frame, text=text, width=12,
                            command=lambda c=cmd: self.set_example_command(c))
             btn.pack(side=tk.LEFT, padx=3)
         
@@ -296,7 +275,7 @@ class VoiceCalendarGUI:
         ttk.Button(control_frame, text="❌ 退出", command=self.root.quit, width=8).pack(side=tk.LEFT, padx=5)
         
         # 状态栏
-        self.status_bar = ttk.Label(self.main_frame, text="✅ 系统就绪 | 支持语音删除特定事项", relief=tk.SUNKEN)
+        self.status_bar = ttk.Label(self.main_frame, text="✅ 系统就绪 | 支持多命令输入（用逗号分隔）", relief=tk.SUNKEN)
         self.status_bar.pack(fill=tk.X, side=tk.BOTTOM, pady=2)
         
         # 配置网格
@@ -455,10 +434,9 @@ class VoiceCalendarGUI:
             if thing_count > 0:
                 text_area.insert(tk.END, f"📋{thing_count}\n", 'count')
             
-            # 显示事项列表（用于删除时参考）
             if day and day.everything:
                 text_area.insert(tk.END, "📝\n", 'list_title')
-                for thing in day.everything[:3]:  # 最多显示3个
+                for thing in day.everything[:3]:
                     text_area.insert(tk.END, f"•{thing.content[:10]}\n", 'list_item')
                 if len(day.everything) > 3:
                     text_area.insert(tk.END, f"•+{len(day.everything)-3}\n", 'list_item')
@@ -531,18 +509,38 @@ class VoiceCalendarGUI:
             self.process_command(text)
     
     def process_command(self, user_input):
+        """处理用户命令 - 自动判断单命令还是多命令"""
         self.update_status(f"处理: {user_input}")
+        self.voice_status.config(text=f"🔄 正在解析命令...", fg="white")
         threading.Thread(target=self._parse_and_execute, args=(user_input,), daemon=True).start()
     
     def _parse_and_execute(self, user_input):
-        command = parse_calendar_command(user_input)
-        self.root.after(0, lambda: self.execute_command(command, user_input))
+        """解析并执行命令 - 自动判断类型"""
+        try:
+            result = parse_calendar_command(user_input)
+            
+            # 自动判断返回类型
+            if isinstance(result, list):
+                # 多个命令
+                print(f"检测到多命令，共{len(result)}个操作")
+                self.root.after(0, lambda: self._execute_multi_commands(result))
+            elif isinstance(result, dict):
+                # 单个命令
+                print(f"检测到单命令: {result}")
+                self.root.after(0, lambda: self._execute_single_command_with_popup(result))
+            else:
+                print(f"未知返回类型: {type(result)}")
+                self.root.after(0, lambda: self.update_status(f"解析错误: 未知返回类型"))
+                
+        except Exception as e:
+            print(f"解析错误: {str(e)}")
+            self.root.after(0, lambda: self.update_status(f"解析错误: {str(e)}"))
     
-    def execute_command(self, command, original_input):
+    def _execute_single_command(self, command):
+        """执行单个命令，返回 (success, message)"""
         action = command.get("action")
         date = command.get("date", 1)
         content = command.get("content", "")
-        delete_content = command.get("delete_content", "")
         time_list = command.get("time", [])
         deadline = command.get("deadline", False)
         
@@ -554,55 +552,47 @@ class VoiceCalendarGUI:
                 msg = f"✅ 已在{date}号添加: {content}"
                 if deadline:
                     msg += " [截止]"
-                messagebox.showinfo("成功", msg)
-                self.update_status(msg)
+                if time_list:
+                    msg += f" ({time_list[0]}:{time_list[1]:02d})"
+                return True, msg
             
             elif action == "delete":
                 day = self.month.get_day(date)
                 if day and day.everything:
-                    # 使用 delete_content 或 content 作为要删除的内容
-                    search_content = delete_content if delete_content else content
-                    
-                    # 查找匹配的事项
+                    search_content = content
                     found_items = []
                     for i, thing in enumerate(day.everything):
-                        # 精确匹配或包含匹配
                         if search_content and (search_content in thing.content or thing.content in search_content):
                             found_items.append((i, thing))
-                        # 如果没有指定具体内容，显示列表让用户选择
                     
                     if len(found_items) == 1:
-                        # 只有一个匹配，直接删除
                         idx, thing = found_items[0]
                         del day.everything[idx]
                         self.update_day_display(date)
                         msg = f"🗑️ 已删除{date}号的事项: {thing.content}"
-                        messagebox.showinfo("成功", msg)
-                        self.update_status(msg)
-                    
+                        return True, msg
                     elif len(found_items) > 1:
-                        # 多个匹配，让用户选择
-                        self.show_delete_selection_dialog(date, found_items, search_content)
-                    
+                        self.root.after(0, lambda: self.show_delete_selection_dialog(date, found_items, search_content))
+                        return False, "需要选择删除哪个事项"
                     else:
-                        # 没有找到，显示当天所有事项让用户选择
                         if day.everything:
-                            self.show_delete_selection_dialog(date, [(i, thing) for i, thing in enumerate(day.everything)], None)
+                            self.root.after(0, lambda: self.show_delete_selection_dialog(date, [(i, thing) for i, thing in enumerate(day.everything)], None))
+                            return False, "请选择要删除的事项"
                         else:
                             msg = f"❌ {date}号没有待办事项"
-                            messagebox.showwarning("未找到", msg)
-                            self.update_status(msg)
+                            return False, msg
                 else:
                     msg = f"❌ {date}号没有待办事项"
-                    messagebox.showwarning("未找到", msg)
-                    self.update_status(msg)
+                    return False, msg
             
             elif action in ["view", "query"]:
-                self.open_day_detail(date)
+                self.root.after(0, lambda: self.open_day_detail(date))
+                return True, f"正在查看第{date}天"
             
             elif action == "clear":
                 if command.get("clear_all"):
                     self.clear_all_things()
+                    return True, "已清空所有事项"
                 else:
                     day = self.month.get_day(date)
                     if day:
@@ -610,17 +600,62 @@ class VoiceCalendarGUI:
                         day.everything.clear()
                         self.update_day_display(date)
                         msg = f"🗑️ 已清空{date}号的{count}个事项"
-                        messagebox.showinfo("成功", msg)
-                        self.update_status(msg)
+                        return True, msg
+                    return False, f"第{date}天没有事项"
             
-            self.update_status(f"完成: {original_input}")
+            elif action == "error":
+                msg = f"❌ 命令解析错误: {content}"
+                return False, msg
+            
+            else:
+                msg = f"❌ 未知操作: {action}"
+                return False, msg
             
         except Exception as e:
-            messagebox.showerror("错误", str(e))
-            self.update_status(f"错误: {str(e)}")
+            error_msg = f"执行出错: {str(e)}"
+            return False, error_msg
+    
+    def _execute_single_command_with_popup(self, command):
+        """执行单个命令并显示弹窗"""
+        success, msg = self._execute_single_command(command)
+        if success:
+            messagebox.showinfo("成功", msg)
+        elif "需要选择" not in msg and "请选择" not in msg:
+            messagebox.showwarning("提示", msg)
+        self.update_status(msg[:50])
+    
+    def _execute_multi_commands(self, commands):
+        """执行多个命令"""
+        results = []
+        success_count = 0
+        fail_count = 0
+        
+        # 更新状态显示
+        self.voice_status.config(text=f"🔄 检测到{len(commands)}个操作，正在依次执行...", fg="white")
+        
+        for i, cmd in enumerate(commands, 1):
+            success, msg = self._execute_single_command(cmd)
+            if success:
+                results.append(f"✅ 操作{i}: {msg[:40]}")
+                success_count += 1
+            else:
+                results.append(f"❌ 操作{i}: {msg[:40]}")
+                fail_count += 1
+            self.root.update()  # 刷新界面
+        
+        # 显示汇总结果
+        summary = f"📊 多命令执行完成\n{'='*35}\n"
+        summary += f"成功: {success_count} 项"
+        if fail_count > 0:
+            summary += f"\n失败: {fail_count} 项"
+        summary += "\n\n" + "\n".join(results)
+        
+        messagebox.showinfo("多命令执行结果", summary)
+        self.update_status(f"多命令完成: 成功{success_count}项，失败{fail_count}项")
+        self.voice_status.config(text=f"✅ 多命令执行完成", fg="white")
+        self.root.after(3000, lambda: self.voice_status.config(text="💡 点击上方绿色按钮开始语音输入"))
     
     def show_delete_selection_dialog(self, date, items, search_keyword):
-        """显示删除选择对话框"""
         dialog = tk.Toplevel(self.root)
         dialog.title(f"选择要删除的事项 - 第{date}天")
         dialog.geometry("400x300")
@@ -658,7 +693,6 @@ class VoiceCalendarGUI:
             if messagebox.askyesno("确认", f"确定要删除第{date}天的所有{len(items)}个事项吗？"):
                 day = self.month.get_day(date)
                 if day:
-                    # 删除所有匹配的（按索引从大到小删除）
                     for idx, _ in sorted(items, key=lambda x: x[0], reverse=True):
                         del day.everything[idx]
                     self.update_day_display(date)
@@ -828,7 +862,7 @@ class VoiceCalendarGUI:
     
     def update_status(self, message):
         self.status_bar.config(text=f"📌 {message}")
-        self.root.after(3000, lambda: self.status_bar.config(text="✅ 系统就绪 | 支持语音删除特定事项"))
+        self.root.after(3000, lambda: self.status_bar.config(text="✅ 系统就绪 | 支持多命令输入（用逗号分隔）"))
 
 
 def main():
