@@ -1,1 +1,2 @@
 pip install SpeechRecognition
+pip install sounddevice scipy

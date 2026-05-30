@@ -1,2 +1,2 @@
-calendar2:语音写入，删除
-calendar1:提醒设置
+data stracture:日历数据的结构
+bai_lian_nlp_parser.py:引入百炼大语言模型，可以完成用户语音输入的自然语言处理
