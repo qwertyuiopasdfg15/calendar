@@ -7,7 +7,7 @@ import requests
 import json
 import re
 
-DASHSCOPE_API_KEY = ""#add your key here
+DASHSCOPE_API_KEY = "sk-c678decd52c24ce28d08a8815654d43d"#add your key here
 
 
 def process_text_by_instruction(text_b: str, instruction_a: str, model: str = "qwen-turbo") -> str:
@@ -77,6 +77,19 @@ MULTI_COMMAND_INSTRUCTION = """
 输出: [{"action":"add","date":2,"content":"和客户开会","time":[15,0],"deadline":false}, {"action":"add","date":3,"content":"交方案","time":[],"deadline":true}, {"action":"add","date":1,"content":"健身","time":[19,0],"deadline":false}, {"action":"view","date":5,"content":"","time":[],"deadline":false}]
 
 【再次强调】只输出一个JSON数组，不要输出任何其他内容。不要输出多个单独的JSON对象！
+
+【修改时间的处理规则 - 重要！】
+当用户说"把A改成B"、"把某时间改成某时间"、"挪到"、"调整到"时，你需要：
+1. 先输出一个 delete 操作，删除原事项
+2. 再输出一个 add 操作，在新时间添加事项
+例如：用户说"把1号下午3点的会改成下午4点"
+输出：[{"action":"delete","date":1,"content":"会","time":[],"deadline":false}, {"action":"add","date":1,"content":"会","time":[16,0],"deadline":false}]
+
+例如：用户说"把3号的健身挪到5号下午5点"
+输出：[{"action":"delete","date":3,"content":"健身","time":[],"deadline":false}, {"action":"add","date":5,"content":"健身","time":[17,0],"deadline":false}]
+
+日期规则: "明天"=2, "后天"=3, "昨天"=1, "今天"=1, "X号"=X
+时间规则: "下午3点"=[15,0], "晚上7点"=[19,0], "上午10点"=[10,0]
 
 现在处理以下输入：
 """
